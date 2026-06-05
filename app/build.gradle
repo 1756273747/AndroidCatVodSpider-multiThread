@@ -81,25 +81,76 @@ dependencies {
 
 // ========== 自定义 Spider JAR 打包任务 ==========
 def buildCustomSpiderJar = tasks.register('buildCustomSpiderJar') {
-    dependsOn 'assembleRelease'
+    // 依赖编译任务，但不依赖完整的APK构建
+    dependsOn 'compileReleaseJavaWithJavac'
+    dependsOn 'compileReleaseKotlin'
     doLast {
-        def apkDir = file("${buildDir}/outputs/apk/release")
-        def apkFile = apkDir.listFiles()?.find { it.name.endsWith('.apk') && !it.name.contains('unsigned') }
-        if (apkFile == null) {
-            println "ERROR: APK not found in ${apkDir}"
-            return
-        }
-
-        // 复制 baksmali 和 apktool 到 build 目录
+        // 复制 baksmali、apktool 和 d8 到 build 目录
         copy {
             from fileTree(dir: project.rootDir.absolutePath + '/jar/3rd', include: ['*.jar'])
             into "${buildDir}/tools"
         }
 
-        // 解压 APK 获取 classes.dex
+        // 收集所有编译后的 class 文件目录
+        def classDirs = []
+        // Java classes
+        def javaClassesDir = file("${buildDir}/intermediates/javac/release/classes")
+        if (javaClassesDir.exists()) classDirs << javaClassesDir
+        // Kotlin classes
+        def kotlinClassesDir = file("${buildDir}/tmp/kotlin-classes/release")
+        if (kotlinClassesDir.exists()) classDirs << kotlinClassesDir
+
+        if (classDirs.isEmpty()) {
+            println "ERROR: No class files found"
+            return
+        }
+
+        // 使用 d8 工具将 class 文件编译为 dex
         def dexOutput = "${buildDir}/dex"
-        fileTree(dir: apkFile.parentFile, include: ['*.apk']).each { f ->
-            copy { from zipTree(f); into dexOutput }
+        file(dexOutput).deleteDir()
+        file(dexOutput).mkdirs()
+
+        // 查找 d8 工具路径
+        def d8Path = null
+        def buildToolsDirs = file("${System.getenv('ANDROID_SDK_ROOT') ?: System.getenv('ANDROID_HOME')}/build-tools").listFiles()?.sort()
+        if (buildToolsDirs) {
+            for (def dir in buildToolsDirs.reverse()) {
+                def d8 = new File(dir, 'd8')
+                if (d8.exists()) {
+                    d8Path = d8.absolutePath
+                    break
+                }
+                def d8Bat = new File(dir, 'd8.bat')
+                if (d8Bat.exists()) {
+                    d8Path = d8Bat.absolutePath
+                    break
+                }
+            }
+        }
+
+        if (d8Path == null) {
+            println "ERROR: d8 tool not found"
+            return
+        }
+
+        // 收集所有 class 文件
+        def allClasses = []
+        classDirs.each { dir ->
+            fileTree(dir: dir, include: '**/*.class').each { f ->
+                allClasses << f.absolutePath
+            }
+        }
+
+        // 运行 d8 生成 dex
+        exec {
+            commandLine d8Path, '--output', dexOutput
+            args allClasses
+        }
+
+        def dexFile = new File(dexOutput, 'classes.dex')
+        if (!dexFile.exists()) {
+            println "ERROR: classes.dex not generated"
+            return
         }
 
         // baksmali 反编译
@@ -107,14 +158,14 @@ def buildCustomSpiderJar = tasks.register('buildCustomSpiderJar') {
         file(smaliOutput).deleteDir()
         javaexec {
             mainClass = '-jar'
-            args = ["${buildDir}/tools/baksmali-2.5.2.jar", 'd', "${dexOutput}/classes.dex", '-o', smaliOutput]
+            args = ["${buildDir}/tools/baksmali-2.5.2.jar", 'd', dexFile.absolutePath, '-o', smaliOutput]
         }
 
         // 复制需要的 smali 到 spider.jar 模板
         def spiderJarDir = project.rootDir.absolutePath + '/jar/spider.jar'
         def spiderSmaliDir = "${spiderJarDir}/smali/com/github/catvod"
 
-        // 清理旧的 spider smali（保留基础框架）
+        // 清理旧的 spider smali
         file("${spiderSmaliDir}/spider").deleteDir()
 
         // 复制新的 spider smali
