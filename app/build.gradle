@@ -1,0 +1,148 @@
+plugins {
+    id 'com.android.application'
+    id 'ru.cleverpumpkin.proguard-dictionaries-generator'
+    id 'org.jetbrains.kotlin.android'
+}
+
+// 禁用有问题的 native 相关任务
+tasks.configureEach { task ->
+    if (task.name.contains('stripReleaseDebugSymbols') || task.name.contains('extractReleaseNativeSymbolTables') || task.name.contains('extractDebugNativeSymbolTables')) {
+        task.enabled = false
+    }
+}
+
+// 在 processReleaseResources 之前确保 stableIds.txt 存在且有效
+tasks.whenTaskAdded { task ->
+    if (task.name == 'processReleaseResources') {
+        task.doFirst {
+            def stableIdsDir = file("${buildDir}/intermediates/stable_resource_ids_file/release/processReleaseResources")
+            stableIdsDir.mkdirs()
+            def stableIdsFile = new File(stableIdsDir, "stableIds.txt")
+            if (!stableIdsFile.exists() || stableIdsFile.length() > 1024 * 1024) {
+                stableIdsFile.text = ""
+            }
+        }
+    }
+}
+
+android {
+    namespace 'com.github.catvod'
+    compileSdk 33
+
+    defaultConfig {
+        applicationId "com.github.catvod.demo"
+        minSdk 16
+        targetSdk 33
+        versionCode 1
+        versionName "1.0"
+        ndk { abiFilters "arm64-v8a" }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled true
+            crunchPngs false
+            proguardFiles 'proguard-rules.pro'
+            proguardDictionaries {
+                dictionaryNames = ["build/class-dictionary", "build/package-dictionary", "build/obfuscation-dictionary"]
+                minLineLength 1
+                maxLineLength 3
+                linesCountInDictionary 100000
+            }
+        }
+    }
+
+    packagingOptions {
+        exclude 'META-INF/*'
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+
+    kotlinOptions {
+        jvmTarget = '1.8'
+    }
+
+    sourceSets {
+        main {
+            jniLibs.srcDirs = ['libs']
+        }
+    }
+
+    lint {
+        abortOnError false
+        checkReleaseBuilds false
+    }
+}
+
+configurations.configureEach {
+    exclude group: 'org.jetbrains.kotlin', module: 'kotlin-stdlib-jdk7'
+    exclude group: 'org.jetbrains.kotlin', module: 'kotlin-stdlib-jdk8'
+}
+
+dependencies {
+    implementation fileTree(dir: 'libs', include: ['*.jar'])
+}
+
+// ========== 自定义 Spider JAR 打包任务 ==========
+def buildCustomSpiderJar = tasks.register('buildCustomSpiderJar') {
+    dependsOn 'assembleRelease'
+    doLast {
+        def apkDir = file("${buildDir}/outputs/apk/release")
+        def apkFile = apkDir.listFiles()?.find { it.name.endsWith('.apk') && !it.name.contains('unsigned') }
+        if (apkFile == null) {
+            println "ERROR: APK not found in ${apkDir}"
+            return
+        }
+
+        // 复制 baksmali 和 apktool 到 build 目录
+        copy {
+            from fileTree(dir: project.rootDir.absolutePath + '/jar/3rd', include: ['*.jar'])
+            into "${buildDir}/tools"
+        }
+
+        // 解压 APK 获取 classes.dex
+        def dexOutput = "${buildDir}/dex"
+        fileTree(dir: apkFile.parentFile, include: ['*.apk']).each { f ->
+            copy { from zipTree(f); into dexOutput }
+        }
+
+        // baksmali 反编译
+        def smaliOutput = "${buildDir}/smali_out"
+        file(smaliOutput).deleteDir()
+        javaexec {
+            mainClass = '-jar'
+            args = ["${buildDir}/tools/baksmali-2.5.2.jar", 'd', "${dexOutput}/classes.dex", '-o', smaliOutput]
+        }
+
+        // 复制需要的 smali 到 spider.jar 模板
+        def spiderJarDir = project.rootDir.absolutePath + '/jar/spider.jar'
+        def spiderSmaliDir = "${spiderJarDir}/smali/com/github/catvod"
+
+        // 清理旧的 spider smali（保留基础框架）
+        file("${spiderSmaliDir}/spider").deleteDir()
+
+        // 复制新的 spider smali
+        copy {
+            from "${smaliOutput}/com/github/catvod/spider"
+            into "${spiderSmaliDir}/spider"
+        }
+
+        // apktool 重打包
+        def outputJar = project.rootDir.absolutePath + '/jar/custom_spider.jar'
+        file(outputJar).delete()
+        javaexec {
+            mainClass = '-jar'
+            args = ["${buildDir}/tools/apktool_2.4.1.jar", 'b', spiderJarDir, '-o', outputJar]
+        }
+
+        // 生成 MD5
+        def md5 = new BigInteger(1, java.security.MessageDigest.getInstance('MD5').digest(file(outputJar).bytes)).toString(16).padLeft(32, '0')
+        new File("${outputJar}.md5").text = md5
+
+        println "Build SUCCESS: ${outputJar}"
+        println "MD5: ${md5}"
+    }
+}

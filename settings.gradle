@@ -1,0 +1,37 @@
+pluginManagement {
+    repositories {
+
+        maven { url 'https://mirrors.huaweicloud.com/repository/maven/' }
+        maven { url 'https://maven.aliyun.com/repository/public/' }
+        maven { url 'https://maven.aliyun.com/repository/google/' }
+        maven { url 'https://maven.aliyun.com/repository/gradle-plugin/' }
+        maven { url 'https://maven.aliyun.com/repository/jcenter/'}
+        maven { url 'https://maven.aliyun.com/repository/central/'}
+        maven { url 'https://maven.aliyun.com/repository/mapr-public/' }
+        gradlePluginPortal()
+        google()
+        mavenCentral()
+
+        maven { url "https://plugins.gradle.org/m2/" }
+        maven { url "https://www.jitpack.io" }
+    }
+}
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+
+        maven { url 'https://mirrors.huaweicloud.com/repository/maven/' }
+        maven { url 'https://maven.aliyun.com/repository/public/' }
+        maven { url 'https://maven.aliyun.com/repository/google/' }
+        maven { url 'https://maven.aliyun.com/repository/gradle-plugin/' }
+        maven { url 'https://maven.aliyun.com/repository/jcenter/'}
+        maven { url 'https://maven.aliyun.com/repository/central/'}
+        maven { url 'https://maven.aliyun.com/repository/mapr-public/' }
+        google()
+        mavenCentral()
+        maven { url "https://www.jitpack.io" }
+    }
+}
+rootProject.name = "AndroidCatVodSpider"
+include ':app'
+include ':tools'
